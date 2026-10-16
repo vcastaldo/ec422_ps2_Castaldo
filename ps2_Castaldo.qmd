@@ -1,0 +1,235 @@
+---
+title: "Problem Set 2"
+author: "Castaldo"
+date: today
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+ **GitHub repo:** <https://github.com/vcastaldo/ec422_ps2_Castaldo>
+ 
+ 
+ ---
+title: "Problem Set 2"
+author: "Castaldo"
+date: today
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+**GitHub repo:** <https://github.com/vcastaldo/ec422_ps2_Castaldo>
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+library(tidyquant)
+library(tidyverse)
+library(knitr)
+```
+
+## Data
+
+The data are monthly, seasonally adjusted unemployment rates (percent) from FRED (Federal Reserve Economic Data), downloaded with `tidyquant::tq_get()`. The five series are the United States (`UNRATE`), Oregon (`ORUR`), California (`CAUR`), Texas (`TXUR`), and New York (`NYUR`). The sample runs from January 1976 through August 2026. The October 2025 observation is missing because of the Fall 2025 government shutdown. The data were downloaded once and saved as an RDS file, which is read in below.
+
+```{r}
+#| label: read-data
+# unemp_raw <- tq_get(
+#   c("UNRATE", "ORUR", "CAUR", "TXUR", "NYUR"),
+#   get  = "economic.data",
+#   from = "1976-01-01"
+# )
+# dir.create("data", showWarnings = FALSE)
+# write_rds(unemp_raw, "data/unemp_raw.rds")
+
+unemp_raw <- read_rds("data/unemp_raw.rds")
+head(unemp_raw)
+```
+
+## Wrangling
+
+I renamed the value column, labeled each series by region, filled in the missing October 2025 value with the September 2025 value within each region, and computed the month-over-month change in the unemployment rate.
+
+```{r}
+#| label: wrangle
+unemp <- unemp_raw |>
+  rename(unemployment_rate = price) |>
+  mutate(
+    region = case_when(
+      symbol == "UNRATE" ~ "United States",
+      symbol == "ORUR"   ~ "Oregon",
+      symbol == "CAUR"   ~ "California",
+      symbol == "TXUR"   ~ "Texas",
+      symbol == "NYUR"   ~ "New York"
+    )
+  )
+
+unemp <- unemp |>
+  arrange(region, date) |>
+  group_by(region) |>
+  mutate(
+    unemployment_rate = replace(
+      unemployment_rate,
+      date == as.Date("2025-10-01"),
+      unemployment_rate[date == as.Date("2025-09-01")]
+    )
+  ) |>
+  ungroup()
+
+unemp <- unemp |>
+  arrange(region, date) |>
+  group_by(region) |>
+  mutate(unemployment_rate_change = unemployment_rate - lag(unemployment_rate)) |>
+  ungroup()
+
+unemp_recent <- unemp |>
+  filter(date >= as.Date("2015-01-01"))
+
+unemp_summary <- unemp |>
+  group_by(region) |>
+  summarize(
+    mean_rate = mean(unemployment_rate, na.rm = TRUE),
+    min_rate  = min(unemployment_rate,  na.rm = TRUE),
+    max_rate  = max(unemployment_rate,  na.rm = TRUE)
+  )
+
+unemp_recent_summary <- unemp_recent |>
+  group_by(region) |>
+  summarize(
+    mean_rate = mean(unemployment_rate, na.rm = TRUE),
+    min_rate  = min(unemployment_rate,  na.rm = TRUE),
+    max_rate  = max(unemployment_rate,  na.rm = TRUE)
+  )
+
+unemp_top_increases <- unemp |>
+  slice_max(unemployment_rate_change, n = 5)
+
+unemp_top_decreases <- unemp |>
+  slice_min(unemployment_rate_change, n = 5)
+
+unemp_no_covid <- unemp |>
+  filter(year(date) != 2020)
+
+unemp_top_increases_no_covid <- unemp_no_covid |>
+  slice_max(unemployment_rate_change, n = 5)
+
+unemp_top_decreases_no_covid <- unemp_no_covid |>
+  slice_min(unemployment_rate_change, n = 5)
+```
+
+The table below shows the mean, minimum, and maximum unemployment rate for each region over the full sample (January 1976 – August 2026).
+
+```{r}
+#| label: tbl-summary
+kable(unemp_summary, digits = 2,
+      col.names = c("Region", "Mean (%)", "Min (%)", "Max (%)"),
+      caption = "Unemployment rate summary, full sample (1976–2026)")
+```
+
+The next table shows the same statistics for January 2015 onward. Mean rates are lower than over the full sample, but the minimum and maximum are unchanged, because both the record lows (late 2010s, 2022–23) and the record highs (the April 2020 COVID spike) occurred after 2015.
+
+```{r}
+#| label: tbl-recent-summary
+kable(unemp_recent_summary, digits = 2,
+      col.names = c("Region", "Mean (%)", "Min (%)", "Max (%)"),
+      caption = "Unemployment rate summary, January 2015 onward")
+```
+
+Excluding 2020, the table below lists the five largest month-over-month increases in the unemployment rate (plus ties) across all regions. Most occur during the 1980 and 2008–09 recessions.
+
+```{r}
+#| label: tbl-increases
+unemp_top_increases_no_covid |>
+  select(region, date, unemployment_rate, unemployment_rate_change) |>
+  kable(digits = 2,
+        col.names = c("Region", "Month", "Unemployment rate (%)", "Change (pp)"),
+        caption = "Largest month-over-month increases, excluding 2020")
+```
+
+Excluding 2020, the table below lists the five largest month-over-month decreases (plus ties). Several come from the 2021 recovery after the pandemic.
+
+```{r}
+#| label: tbl-decreases
+unemp_top_decreases_no_covid |>
+  select(region, date, unemployment_rate, unemployment_rate_change) |>
+  kable(digits = 2,
+        col.names = c("Region", "Month", "Unemployment rate (%)", "Change (pp)"),
+        caption = "Largest month-over-month decreases, excluding 2020")
+```
+
+## Visualization
+
+The first figure plots the monthly unemployment rate for all five regions together. Unemployment rises sharply in every recession (early 1980s, early 1990s, 2001, 2008–09) and spikes dramatically in April 2020.
+
+```{r}
+#| label: fig-line
+ggplot(unemp, aes(x = date, y = unemployment_rate, color = region)) +
+  geom_line() +
+  labs(
+    title = "Monthly Unemployment Rate by Region, 1976–2026",
+    x = "Date",
+    y = "Unemployment Rate (%)",
+    color = "Region"
+  ) +
+  theme_minimal()
+```
+
+The second figure shows the same data with a separate panel for each region, which makes each region's pattern easier to see.
+
+```{r}
+#| label: fig-facet
+ggplot(unemp, aes(x = date, y = unemployment_rate, color = region)) +
+  geom_line() +
+  facet_wrap(~ region) +
+  labs(
+    title = "Monthly Unemployment Rate by Region, 1976–2026",
+    x = "Date",
+    y = "Unemployment Rate (%)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+The third figure compares average unemployment over the full sample, ordered from lowest to highest. Texas has the lowest average rate and California the highest.
+
+```{r}
+#| label: fig-bar
+ggplot(unemp_summary,
+       aes(x = fct_reorder(region, mean_rate), y = mean_rate, fill = region)) +
+  geom_col() +
+  labs(
+    title = "Average Unemployment Rate by Region, 1976–2026",
+    x = "Region",
+    y = "Mean Unemployment Rate (%)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+For my own plot, I graphed the gap between Oregon's and the U.S. unemployment rate to see whether Oregon's labor market moves with the nation. Oregon's unemployment tends to rise well above the national rate during recessions (the early 1980s, 2001–03, and 2009), suggesting its economy is more sensitive to downturns, though it was below the U.S. during much of the 1990s and the 2020 COVID spike.
+
+```{r}
+#| label: fig-gap
+or_us_gap <- unemp |>
+  filter(region %in% c("Oregon", "United States")) |>
+  select(date, region, unemployment_rate) |>
+  pivot_wider(names_from = region, values_from = unemployment_rate) |>
+  mutate(gap = Oregon - `United States`)
+
+ggplot(or_us_gap, aes(x = date, y = gap)) +
+  geom_line(color = "darkgreen") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Oregon Unemployment Rate Minus U.S. Rate, 1976–2026",
+    x = "Date",
+    y = "Oregon − U.S. (percentage points)"
+  ) +
+  theme_minimal()
+```
+
+## Reflection
+ Using ggplot to create the graphs was straightforward, since we practiced it a lot in EC 421. The mutate() function kept tripping me up, especially getting the parentheses and commas in the right places inside a pipe. I feel more comfortable using it now, but I still need more practice. I also feel more comfortable uploading my work to GitHub than I did before this assignment. Quarto was easy to pick up because it works a lot like R Markdown.
